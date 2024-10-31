@@ -21,11 +21,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install gunicorn for production
-RUN pip install gunicorn
+# Install additional dependencies
+RUN pip install uvicorn
 
 # Create necessary directories
-RUN mkdir -p /app/uploads/audio /app/uploads/recordings
+RUN mkdir -p /app/uploads/audio /app/uploads/recordings && \
+    chmod -R 777 /app/uploads
 
 # Copy application code
 COPY backend/ .
@@ -34,35 +35,17 @@ COPY backend/ .
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV TZ=UTC
-ENV WORKERS_PER_CORE=2
-ENV MAX_WORKERS=8
-ENV TIMEOUT=300
-ENV GRACEFUL_TIMEOUT=300
-ENV KEEP_ALIVE=5
-
-# Set Python path
 ENV PYTHONPATH=/app
-
-# Create non-root user
-RUN adduser --disabled-password --gecos '' appuser
-RUN chown -R appuser:appuser /app /opt/venv
-USER appuser
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
 
 # Expose port
 EXPOSE 8000
 
-# Use gunicorn for production with uvicorn workers
-CMD ["gunicorn", \
-     "--bind", "0.0.0.0:8000", \
-     "--workers", "8", \
-     "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--timeout", "300", \
-     "--keep-alive", "5", \
-     "--log-level", "info", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-", \
-     "app.main:app"]
+# Create a simple script to verify the health endpoint
+RUN echo '#!/bin/sh\ncurl -f http://127.0.0.1:8000/health || exit 1' > /healthcheck.sh && \
+    chmod +x /healthcheck.sh
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD /healthcheck.sh
+
+# Default command (can be overridden in docker-compose)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   db:
     image: postgres:13
@@ -45,7 +47,7 @@ services:
       dockerfile: docker/backend.Dockerfile
     volumes:
       - ./backend:/app
-      - ./uploads:/app/uploads
+      - uploads_volume:/app/uploads
     environment:
       - DATABASE_URL=postgresql://user:password@db:5432/whisperdb
       - REDIS_URL=redis://redis:6379/0
@@ -68,28 +70,62 @@ services:
       - backend-network
       - frontend-network
 
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - REACT_APP_API_URL=https://transcriptwithai.com
+      - NODE_ENV=production
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - frontend-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
   celery_worker:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
-    command: celery -A app.worker worker -l info --concurrency=2 --max-memory-per-child=512000
+    command: >
+      sh -c "
+        mkdir -p /app/uploads/recordings &&
+        chmod -R 777 /app/uploads &&
+        celery -A app.celery.celery_app worker 
+        --loglevel=info 
+        --concurrency=2
+      "
     volumes:
       - ./backend:/app
-      - ./uploads:/app/uploads
+      - uploads_volume:/app/uploads
     environment:
       - DATABASE_URL=postgresql://user:password@db:5432/whisperdb
       - REDIS_URL=redis://redis:6379/0
-    deploy:
-      resources:
-        limits:
-          memory: 2.5G
-        reservations:
-          memory: 1.5G
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CELERY_BROKER_CONNECTION_RETRY=true
+      - CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP=true
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - C_FORCE_ROOT=true
     depends_on:
-      - redis
-      - backend
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
     networks:
       - backend-network
+    restart: unless-stopped
+    healthcheck:
+      disable: true
 
   nginx:
     image: nginx:alpine
@@ -98,24 +134,34 @@ services:
       - "443:443"
     volumes:
       - ./nginx:/etc/nginx/conf.d
-      - ./certbot/conf:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - uploads_volume:/app/uploads:ro
     depends_on:
       - backend
       - frontend
     networks:
       - frontend-network
+      - backend-network
+    restart: unless-stopped
 
   certbot:
     image: certbot/certbot
     volumes:
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
-    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $!; done;'"
+    command: >-
+      certonly --webroot -w /var/www/certbot 
+      --email your@email.com
+      --agree-tos 
+      --no-eff-email
+      -d transcriptwithai.com
+      -d www.transcriptwithai.com
 
 volumes:
   postgres_data:
   redis_data:
+  uploads_volume:
+    name: speechtotext_uploads
 
 networks:
   backend-network:

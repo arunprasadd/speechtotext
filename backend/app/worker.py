@@ -3,25 +3,23 @@ from celery import Celery
 from .config import settings
 
 celery = Celery(
-    "whisper_worker",
+    'tasks',
     broker=settings.REDIS_URL,
-    backend=settings.REDIS_URL
+    backend=settings.REDIS_URL,
+    include=['app.tasks']
 )
 
 celery.conf.update(
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    timezone="UTC",
+    task_serializer='json',
+    accept_content=['json'],
+    result_serializer='json',
+    timezone='UTC',
     enable_utc=True,
     task_track_started=True,
-    task_time_limit=3600,  # 1 hour max
-    worker_max_memory_per_child=1000000,  # 1GB
-    worker_prefetch_multiplier=1
+    task_time_limit=3600,
+    worker_max_memory_per_child=1000000,
+    worker_prefetch_multiplier=1,
+    broker_transport_options={'visibility_timeout': 3600},
+    broker_connection_retry=True,
+    broker_connection_max_retries=None
 )
-
-# Optional: Configure task routes
-celery.conf.task_routes = {
-    "app.tasks.transcribe_audio": {"queue": "transcription"},
-    "app.tasks.process_recording": {"queue": "recording"}
-}
